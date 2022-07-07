@@ -1,0 +1,834 @@
+---
+title: "PTSD oral microbiome report"
+author: "Guy Shapira"
+date: "2/13/2021"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+---
+
+```{r}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+knitr::opts_chunk$set(fig.width=12, fig.height=8)
+library(tidyverse)
+library(ggrepel)
+library(phyloseq)
+library(microbiome)
+```
+
+
+```{r}
+#TODO: Deal with duplicate names from different branches
+get_taxa_diffabund=function(ds, des, trank=NA, grp=NA, coef=1){
+  if (is.na(grp)) {
+    grp=des
+  }
+  
+  library(ANCOMBC)
+  if((is.na(trank)) | (trank == "ASV")){
+    dds=ds
+  } else{
+    dds=aggregate_taxa(ds, trank)
+  }
+  o=ancombc(dds, formula = des,
+            p_adj_method = "fdr",
+            group=grp, zero_cut = 0.95,
+            lib_cut = 1000)
+  oo=tibble(pvalue=o$res$p_val[[coef]], taxon=rownames(o$res$p_val), 
+            qvalue=o$res$q_val[[coef]], stat=o$res$W[[coef]], 
+            beta=o$res$beta[[coef]], se=o$res$se[[coef]])
+  return(oo)
+}
+
+diffabund=function(ds, des, grp=NA, coef=1)
+{
+  rs=c("Phylum", "Class", "Order", "Family", "Genus", "Species", "ASV")
+  res=lapply(rs, function(r) get_taxa_diffabund(ds, des, trank = r, grp=grp, coef = coef) %>% mutate(taxon_rank=r))
+  res=bind_rows(res)
+  res=res %>% dplyr::arrange(pvalue)
+  
+  return(res)
+}
+
+microbe_violin=function(ds, taxon, intgroup, trank="Genus"){
+  norm=transform_sample_counts(ds, function(x)x/sum(x))
+  agg=aggregate_taxa(norm, trank)
+  df=psmelt(prune_taxa(taxon, agg))[,c("ID", "Abundance", trank)]
+  df=df %>% left_join(sam, by="ID") %>%
+    dplyr::filter(!is.na(!!rlang::sym(intgroup)))
+  df[[intgroup]]=ifelse(df[[intgroup]], "Yes", "No")
+
+  p=df %>% 
+    ggplot(aes(!!rlang::sym(intgroup), Abundance, fill=!!rlang::sym(intgroup))) + geom_violin() + geom_boxplot() + geom_point() +
+    ggtitle(str_c(trank, taxon, sep = " ")) + ylab("Fractional abundance") + theme_classic()
+  
+  return(p)
+}
+```
+
+```{r}
+norm=transform_sample_counts(ds, function(x)x/sum(x))
+agg=aggregate_taxa(norm, "Class")
+taxon="Coriobacteriia"
+trank="Class"
+intgroup="O3"
+df=psmelt(prune_taxa(taxon, agg))[,c("ID", "Abundance", trank)]
+df=df %>% left_join(sam, by="ID") %>%
+  dplyr::filter(!is.na(!!rlang::sym(intgroup)))
+df %>% ggpubr::gghistogram("O3")
+df=df %>% mutate(O3=ifelse(O3 > 0.003, "High", "Low"))
+p=df %>% 
+  ggplot(aes(!!rlang::sym(intgroup), log2(Abundance + 2) - 1, fill=!!rlang::sym(intgroup))) + geom_violin() + geom_boxplot() + geom_point() +
+  ggtitle(str_c("Abundance of", trank, taxon, sep = " ")) + ylab("Fractional abundance") + theme_classic()
+p
+```
+
+```{r eval=FALSE}
+trank="Class"
+taxon="Coriobacteriia"
+intgroup="O3"
+microbe_corr=function(ds, taxon, intgroup, trank="Genus"){
+  norm=transform_sample_counts(ds, function(x)x/sum(x))
+  agg=aggregate_taxa(norm, trank)
+  df=psmelt(agg)[,c("ID", "Abundance", trank)]
+  df=df %>% dplyr::filter(!!rlang::sym(trank) == taxon)
+  p=df %>% left_join(sam, by="ID") %>%
+    ggplot(aes(!!rlang::sym(intgroup), Abundance)) + geom_point() + geom_smooth() + theme_classic() + 
+    ggtitle(str_c("Abundance of", trank, taxon, sep = " ")) + ylab("Fractional abundance")
+  
+  return(p)
+}
+df=df %>% left_join(sam, by="ID")
+
+df %>% filter(!is.na(O3)) %>%
+  mutate(`O3 quantile`=gtools::quantcut(O3, q = 3)) %>% 
+  ggplot(aes(`O3 quantile`, Abundance)) + geom_boxplot()
+
+df %>% 
+    ggplot(aes(!!rlang::sym(intgroup), Abundance)) + geom_point() + geom_smooth() + theme_classic() + 
+    ggtitle(str_c("Abundance of", trank, taxon, sep = " ")) + ylab("Fractional abundance") + scale_y_log10()
+```
+
+```{r}
+cs_scores=c("avoidence_severity_score", "negative_cognition_and_mood_severity_score", "total_severity_score", "reactivity_severity_score", "intrusive_severity_score", "psychopathology_total_score")
+```
+
+```{r fig.width=8}
+library(ggsignif)
+microbe_corr=function(ds, taxon, intgroup, trank="Genus"){
+  norm=transform_sample_counts(ds, function(x)x/sum(x))
+  agg=aggregate_taxa(norm, trank)
+  df=psmelt(agg)[,c("ID", "Abundance", trank)]
+  df=df %>% dplyr::filter(!!rlang::sym(trank) == taxon)
+  p=df %>% left_join(sam, by="ID") %>%
+    ggplot(aes(!!rlang::sym(intgroup), Abundance)) + geom_point() + geom_smooth() + theme_classic() + 
+    ggtitle(str_c("Abundance of", trank, taxon, sep = " ")) + ylab("Fractional abundance")
+  
+  return(p)
+}
+
+p1=microbe_corr(ds, "Bacteroidetes", "years_of_education", "Phylum") + ggtitle("Phylum Bacteroidetes")
+p2=microbe_corr(ds, "bacterium_HMT_871", "years_of_education", "Species") + ggtitle("Species bacterium_HMT_871")
+
+p3=microbe_violin(ds, "noxia", "memory_difficulties", "Species") + 
+  theme(axis.title.x = element_blank(),
+           legend.position = "bottom", axis.text.x = element_blank(),
+           legend.text = element_text(size=14), axis.title.y = element_text(size=14),
+           legend.title = element_text(size=14), legend.spacing.x = unit(25, "pt"),
+        axis.text.y = element_text(size=10))
+p4=microbe_violin(ds, "Bacteroidetes", "memory_difficulties", "Phylum") + 
+  theme(axis.title.x = element_blank(),
+           legend.position = "bottom", axis.text.x = element_blank(),
+           legend.text = element_text(size=14), axis.title.y = element_text(size=14),
+           legend.title = element_text(size=14), legend.spacing.x = unit(25, "pt"),
+        axis.text.y = element_text(size=10))
+p4
+#+ scale_y_log10() + geom_signif(comparisons = list(c("Yes","No")), annotations = c("Wilcox P=0.05"))
+
+p5=microbe_violin(ds, "Bacteroidia", "memory_difficulties", "Class") + 
+  theme(axis.title.x = element_blank(),
+           legend.position = "bottom", axis.text.x = element_blank(),
+           legend.text = element_text(size=14), axis.title.y = element_text(size=14),
+           legend.title = element_text(size=14), legend.spacing.x = unit(25, "pt"),
+        axis.text.y = element_text(size=10)) 
+p5
+
+p6=microbe_violin(ds, "sp._HMT_332", "additional_symptomatology", "Species") + 
+  theme(axis.title.x = element_blank(),
+           legend.position = "bottom", axis.text.x = element_blank(),
+           legend.text = element_text(size=14), axis.title.y = element_text(size=14),
+           legend.title = element_text(size=14), legend.spacing.x = unit(25, "pt"),
+        axis.text.y = element_text(size=10)) 
+p6
+
+p7=microbe_violin(ds, "noxia", "significant_recent_weight_loss", "Species") + 
+  theme(axis.title.x = element_blank(),
+           legend.position = "bottom", axis.text.x = element_blank(),
+           legend.text = element_text(size=14), axis.title.y = element_text(size=14),
+           legend.title = element_text(size=14), legend.spacing.x = unit(25, "pt"),
+        axis.text.y = element_text(size=10)) 
+p7
+
+pp=cowplot::plot_grid(cowplot::plot_grid(p1, p2 + theme(axis.title.y = element_blank())), 
+                      cowplot::plot_grid(p3, p4 + theme(axis.title.y = element_blank()), 
+                                         p6, p7 + theme(axis.title.y = element_blank())), rel_widths = c(0.5, 1))
+#pp
+ggsave("mergedplot.png", pp, width = 20, height = 10)
+```
+
+
+```{r eval=FALSE}
+aqidf=read_csv("air_pollution/waqi-covid-2019Q2.csv", skip = 4)
+aqidf=aqidf %>% dplyr::filter(Country == "IL")
+aqidf=aqidf %>% group_by(City, Specie) %>% summarise(pollution_max=max(`median`)) %>%
+  dplyr::filter(Specie %in% c("humidity", "pm25", "pressure", "temprature")) %>%
+  ungroup()
+aqidf
+
+stations_df=jsonlite::read_json("air_pollution/airquality-covid19-cities.json")
+stations_df$data
+```
+
+
+```{r}
+# Add numeric income scale
+cc=1:length(levels(sam$income))
+names(cc)=levels(sam$income)
+
+hcc=c("alergy", "blood_preasure", "ulcer", "other_digestion_issues", "heart_problems", "chest_pain", "diabetes", "back_ache", "head_aches", "joint_aches", "memory_difficulties", "weakness_fatigue", "cancer", "chronic_pain_physiologically_induced", "chronic_idiopathic_pain", "drug_abuse", "alcohol_abuse", "smoking")
+sam$health_issues_count=rowSums(sam[,hcc])
+```
+
+
+```{r fig.height=10}
+css=c(cs_scores, "years_of_education", "somatic_complaints", "age", "income", "health_issues_count",
+      "obsessive_compulsive_problems", "interpersonal_sensitivity", "depression", "anxiety", "hostility",
+      "dyadic_adjustment_scale", "post_traumatic_growth", "social_support", "life_satisfaction", "subjective_well_being", "PM2.5 (μg/m^3)", "lat", "lng")#, "CO", "NO2", "O3", "SO2")
+
+rsam=sam[,css]
+
+rsam$income=as.vector(cc[rsam$income])
+
+library(corrplot)
+
+M=cor(rsam, use = "complete.obs")
+testRes = cor.mtest(rsam, conf.level = 0.95)
+
+png(width = 1200, height = 1200, filename = "correlation_plot.png")
+corrplot(M, p.mat = testRes$p, sig.level = 0.05, tl.cex = 1,
+         order = "hclust", insig = "label_sig", tl.col = "black", diag = F)
+dev.off()
+
+```
+
+```{r}
+res=diffabund(ds, "PM2.5..μg.m.3.")
+res
+sample_data(ds) %>% colnames()
+microbe_corr(ds, "Saccharibacteria_(TM7)_[G-2]", "PM2.5..μg.m.3.",  "Genus")
+res %>% filter(taxon_rank != "ASV") %>% write_csv("PM2.5..μg.m.3.differential_abundance.csv")
+```
+```{r}
+res=diffabund(ds, "O3")
+res
+res %>% filter(taxon_rank != "ASV") %>% write_csv("NO2.differential_abundance.csv")
+```
+
+```{r}
+Peptococcaceae
+#ds %>% sample_names()
+microbe_corr(ds, "Peptococcaceae", "NO2",  "Family")
+```
+```{r}
+res=diffabund(ds, "SO2")
+res %>% filter(taxon_rank != "ASV") %>% write_csv("SO2.differential_abundance.csv")
+```
+
+```{r}
+microbe_corr(ds, "sp._HMT_917", "SO2",  "Species") + scale_y_log10()
+```
+
+
+```{r}
+res=diffabund(ds, "O3")
+res %>% filter(taxon_rank != "ASV") %>% write_csv("O3.differential_abundance.csv")
+```
+
+```{r}
+microbe_corr(ds, "Coriobacteriia", "O3",  "Class") + scale_x_log10()
+```
+
+```{r}
+norm=transform_sample_counts(ds, function(x)x/sum(x))
+agg=aggregate_taxa(norm, "Class")
+taxon="Coriobacteriia"
+trank="Class"
+intgroup="O3"
+df=psmelt(prune_taxa(taxon, agg))[,c("ID", "Abundance", trank)]
+df=df %>% left_join(sam, by="ID") %>%
+  dplyr::filter(!is.na(!!rlang::sym(intgroup)))
+df %>% ggpubr::gghistogram("O3")
+df=df %>% mutate(O3=ifelse(O3 > 0.003, "High", "Low"))
+p=df %>% 
+  ggplot(aes(!!rlang::sym(intgroup), log2(Abundance + 2) - 1, fill=!!rlang::sym(intgroup))) + geom_violin() + geom_boxplot() + geom_point() +
+  ggtitle(str_c("Abundance of", trank, taxon, sep = " ")) + ylab("Fractional abundance") + theme_classic()
+p
+```
+
+```{r}
+norm=transform_sample_counts(ds, function(x)x/sum(x))
+agg=aggregate_taxa(norm, "Class")
+taxon="Ruminococcaceae"
+trank="Family"
+intgroup="O3"
+df=psmelt(prune_taxa(taxon, agg))[,c("ID", "Abundance", trank)]
+df=df %>% left_join(sam, by="ID") %>%
+  dplyr::filter(!is.na(!!rlang::sym(intgroup)))
+df %>% ggpubr::gghistogram("O3")
+df=df %>% mutate(O3=ifelse(O3 > 0.003, "High", "Low"))
+p=df %>% 
+  ggplot(aes(!!rlang::sym(intgroup), log2(Abundance + 2) - 1, fill=!!rlang::sym(intgroup))) + geom_violin() + geom_boxplot() + geom_point() +
+  ggtitle(str_c("Abundance of", trank, taxon, sep = " ")) + ylab("Fractional abundance") + theme_classic()
+p
+```
+
+
+Ordination
+```{r fig.height=12, eval=FALSE}
+oo=list()
+for (p1 in c("DCA", "CCA", "RDA", "CAP", "DPCoA", "NMDS", "MDS", "PCoA")) {
+  for (p2 in c(distanceMethodList$vegdist, distanceMethodList$UniFrac, distanceMethodList$DPCoA, distanceMethodList$JSD)) {
+    o=tryCatch({
+      o=ds %>% ordinate(p1, p2)
+      o=o$vectors %>% as.data.frame()
+      o=o %>% mutate(ID=rownames(o), method=p1, distance=p2)
+      
+      return(o)
+    }, 
+               error=function(x){
+      return(tibble())
+    })
+    
+    oo=c(list(oo), o)
+  }
+}
+
+
+ds
+ds %>% plot_ordination(color="hypothetical_batch", 
+                       ordination = "PCoA")
+
+bc=ordinate(ds, method = "PCoA", distance = "unifrac")
+ds %>% plot_ordination(bc, type="samples", color="current_PTSD")
+
+
+ufc=UniFrac(ds, parallel = TRUE, weighted = FALSE)
+library(ComplexHeatmap)
+p=ufc %>% as.matrix() %>% Heatmap()
+p
+```
+
+
+# Diversity
+```{r fig.height=8}
+# Load data and samplesheet
+fullds=readRDS("unfiltered_dataset.rds")
+
+sam=readRDS("revised_samplesheet.rds") %>% as.data.frame()
+rownames(sam)=sam$ID
+sample_data(fullds)=sam
+
+fullds=prune_species(speciesSums(fullds) > 0, fullds)
+fullds=prune_samples(sample_names(fullds)[-which(sample_names(fullds) == "3230")], fullds)
+
+PRNG_SEED=1901
+
+downds=rarefy_even_depth(fullds, replace = TRUE, rngseed = PRNG_SEED)
+
+ddf=downds %>% estimate_richness()
+rownames(ddf)=unlist(str_replace(rownames(ddf), "X", ""))
+ddf=ddf %>% mutate(ID=rownames(ddf))
+ddf=ddf %>% left_join(sam, by="ID")
+ddf=ddf %>% dplyr::filter(ID != "3230")
+
+cs=c("back_ache", "drug_abuse", "significant_recent_weight_loss", "joint_aches", "other_digestion_issues", "blood_preasure", "chest_pain", "weakness_fatigue", "distress", "chronic_idiopathic_pain", "dissociation", "smoking", "memory_difficulties", "additional_symptomatology", "head_aches", "diabetes", "significant_recent_weight_gain", "ulcer", "heart_problems", "alergy", "cancer", "chronic_pain_physiologically_induced", "regular_medication", "alcohol_abuse")
+
+
+#ddf=ddf %>% mutate(across(c(CO, NO2, O3), function(x) gtools::quantcut(x, q=2)))
+
+pps=c()
+intgroup="realization"
+for (intgroup in cs) {
+  rddf=ddf %>% dplyr::filter(!is.na(!!rlang::sym(intgroup)))
+  p=rddf %>% 
+    ggplot(aes(!!rlang::sym(intgroup), Chao1, fill=!!rlang::sym(intgroup))) + geom_boxplot()
+  rddf$intgroup=rddf[,intgroup]
+  r=wilcox.test(Chao1 ~ intgroup, data = rddf)
+  p=p + ggtitle(str_c("Chao1 wilcox W=", r$statistic[["W"]], " P=", format(r$p.value, digits = 3)))
+  ggsave(file.path("diversity", str_c(intgroup, "Chao1", "png", sep = ".")), p)
+  pps=c(pps, r$p.value)
+}
+
+
+intgroup="memory_difficulties"
+rddf=ddf %>% dplyr::filter(!is.na(!!rlang::sym(intgroup)))
+
+p=rddf %>% mutate(across(c(intgroup), function(x) ifelse(x, "Yes", "No"))) %>%
+  ggplot(aes(!!rlang::sym(intgroup), Chao1, fill=!!rlang::sym(intgroup))) + geom_boxplot()
+rddf$intgroup=rddf[,intgroup]
+r=wilcox.test(Chao1 ~ intgroup, data = rddf)
+p=p + ggtitle(str_c("Chao1 wilcox W=", r$statistic[["W"]], " P=", format(r$p.value, digits = 3)))
+p1=p
+
+
+intgroup="current_PTSD"
+rddf=ddf %>% dplyr::filter(!is.na(!!rlang::sym(intgroup)))
+p=rddf %>% mutate(across(c(intgroup), function(x) ifelse(x, "Yes", "No"))) %>%
+  ggplot(aes(!!rlang::sym(intgroup), Chao1, fill=!!rlang::sym(intgroup))) + geom_boxplot()
+rddf$intgroup=rddf[,intgroup]
+r=wilcox.test(Chao1 ~ intgroup, data = rddf)
+p=p + ggtitle(str_c("Chao1 wilcox W=", r$statistic[["W"]], " P=", format(r$p.value, digits = 3)))
+p
+p2=p
+```
+
+
+# Differential abundance
+```{r}
+da=bind_rows(lapply(bracer::glob("differential_abundance/*.diffabundance.csv"), function(x) read_csv(x) %>% mutate(comparison=str_replace(basename(x), ".diffabundance.csv", ""))))
+```
+
+```{r}
+irrelevant=c("ptsd_diagnosis_1983", "birth_country", "ptsd_diagnosis_1984", "group", "family_status", "ptsd_diagnosis_2002", "religiosity")
+cs_counts=c("negative_cognition_and_mood_symptoms_count", "reactivity_symptoms_count", "total_symptoms_count", "intrusive_symptoms_count", "avoidence_symptoms_count")
+cs_scores=c("avoidence_severity_score", "negative_cognition_and_mood_severity_score", "total_severity_score", "reactivity_severity_score", "intrusive_severity_score", "psychopathology_total_score")
+cs=c("back_ache", "somatic_complaints", "drug_abuse", "age", "realization", "significant_recent_weight_loss", "joint_aches", "social_support", "other_digestion_issues", "post_traumatic_growth", "blood_preasure", "ethnicity", "chest_pain", "weakness_fatigue", "distress", "chronic_idiopathic_pain", "years_of_education", "dissociation", "life_satisfaction", "smoking", "interpersonal_sensitivity", "subjective_well_being", "memory_difficulties", "additional_symptomatology", "phobic_anxiety", "head_aches", "dyadic_adjustment_scale", "paranoid_ideation", "diabetes", "obsessive_compulsive_problems", "significant_recent_weight_gain", "ulcer", "hostility", "heart_problems", "alergy", "income", "cancer", "anxiety", "chronic_pain_physiologically_induced", "depression", "regular_medication", "alcohol_abuse", "psychoticism")
+```
+
+
+```{r}
+microbe_volcano=function(res){
+  rs=c("Phylum", "Class", "Order", "Family", "Genus", "Species")#, "ASV")
+  cs=c("#0091FF","#005EEB","#003CFF","#0010EB","#4400F7","#260087")#,"#c7e9b4")#,"#edf8b1","#ffffd9")
+  res$taxon_rank=factor(res$taxon_rank, levels = rs)
+  p=res %>% mutate(significance=case_when(qvalue < 0.05 & recurring ~ 11,
+                                          qvalue < 0.05 ~ 8,
+                                          TRUE ~ 20),
+                   ssize=case_when(qvalue < 0.05 ~ 5,
+                                          TRUE ~ 3),
+                   salpha=case_when(qvalue < 0.05 ~ 1,
+                                          TRUE ~ 0.4),
+                 tax_lab=ifelse(qvalue < 0.05, taxon, "")) %>%
+    ggplot(aes(stat, -log10(pvalue), color=taxon_rank, label=tax_lab)) + 
+    scale_shape_identity() + scale_size_identity() + scale_alpha_identity() +
+    geom_point(aes(shape=significance, size=ssize, alpha=salpha)) +
+    geom_hline(yintercept = -log10(0.05)) + geom_vline(xintercept = 0) +
+    geom_text_repel(max.time = 5, max.overlaps = 50, max.iter = 1e6,
+                    nudge_y = 2, nudge_x = 1.5, size=4) + theme_classic() +
+    scale_color_manual(breaks = rs, values = cs)
+  
+  return(p)
+}
+```
+
+
+
+```{r fig.width=18, fig.height=12}
+dda=da %>% 
+  filter(comparison %in% c("anxiety", "hostility", "total_severity_score",
+                           "reactivity_symptoms_count",
+                           "psychopathology_total_score", "years_of_education",
+                           "memory_difficulties", "additional_symptomatology"))
+
+
+r=dda %>% filter(taxon_rank != "ASV") %>% 
+  mutate(comparison=case_when(comparison == "anxiety" ~ "Anxiety", 
+                              comparison == "hostility" ~ "Hostility", 
+                              comparison == "total_severity_score" ~ "Total severity score",
+                              comparison == "reactivity_symptoms_count" ~ "Reactivity symptoms count",
+                              comparison == "psychopathology_total_score" ~ "Psychopathology total score", 
+                              comparison == "years_of_education" ~ "Years of education",
+                              comparison == "memory_difficulties" ~ "Memory difficulties", 
+                              comparison == "additional_symptomatology" ~ "Additional symptomatology"))
+
+rr=r %>% filter(qvalue < 0.05) %>%
+  group_by(taxon, taxon_rank) %>% count() %>% 
+  filter(n > 1) %>% arrange(-n) %>% ungroup()
+
+r=r %>% left_join(rr %>% mutate(recurring=TRUE) %>% select(taxon, taxon_rank, recurring), by=c("taxon", "taxon_rank"))
+
+
+rr %>% inner_join(r, by=c("taxon", "taxon_rank")) %>% 
+  mutate(sig=ifelse(qvalue < 0.05, 1, 0.2)) %>%
+  ggplot(aes(stat, comparison, fill=-log10(pvalue), alpha=sig)) +
+  geom_bar(stat = "identity") + facet_wrap(~taxon) + scale_alpha_identity() +
+  theme(legend.position="none", axis.title = element_text(size = 16),
+        strip.text = element_text(size = 12), axis.text.y = element_text(size=14))
+
+p=r %>%
+  microbe_volcano() + facet_wrap(~comparison) + 
+  theme(legend.position="none", axis.title = element_text(size = 16),
+        strip.text = element_text(size = 16))
+pp=cowplot::get_legend(p)
+ggsave("volcanos_legend.png", ggplotify::as.ggplot(pp))
+ggsave("volcanos.png", p, width = 18, height = 12)
+```
+
+
+
+```{r fig.height=6, fig.width=15}
+library(ggrepel)
+library(ggbreak)
+
+dda=da %>% dplyr::filter(qvalue < 0.05 & taxon_rank != "ASV") %>% 
+  mutate(trend=ifelse(stat > 0, "Up", "Down")) %>%
+  filter(comparison %in% c(cs, cs_scores)) %>%
+  group_by(comparison, trend) %>% count() %>% arrange(-n) %>% ungroup() %>% 
+  mutate(`n`=ifelse(`n` == 0, 0, log2(`n`))) %>% arrange(n)
+
+exc=dda %>% group_by(comparison) %>% summarise(n=sum(n)) %>% arrange(n) %>% filter(n == 0)
+
+
+p3=dda %>%  filter(!(comparison %in% exc)) %>%
+  pivot_wider(id_cols = c(comparison, trend), names_from = "trend", values_from = "n", values_fill = 0) %>%
+  ggplot(aes(Up, Down, label=comparison)) + geom_point() + 
+  geom_label_repel(max.overlaps = 1e6, box.padding = 1, label.padding = 0.35, direction = "both", max.time = 100) +
+  ylab("# Decreasing taxa") + xlab("# Increasing taxa") +
+  scale_x_continuous(breaks = c(0,2,4, 5), labels = c(0, 4, 16, 32)) +
+  scale_y_continuous(breaks = c(0, 2, 4, 5), labels = c(0, 4, 16, 32)) #+ theme_minimal()
+
+exc
+#scale_y_continuous(breaks = 0:2, labels = )
+#scale_x_break(c(20, 35), scales = 1)
+```
+
+
+```{r fig.width=15, fig.height=8}
+library(ggthemes)
+library(ggsignif)
+pp1=p1 + #theme_base() +
+  theme(plot.title = element_blank(), axis.title.x = element_blank(),
+           legend.position = "top", axis.text.x = element_blank(),
+           legend.text = element_text(size=14), 
+           legend.title = element_text(size=14), legend.spacing.x = unit(25, "pt")) +
+  scale_y_log10() + geom_signif(comparisons = list(c("Yes","No")), annotations = c("Wilcox P=0.05"))
+
+pp2=p2 + #theme_base() +
+  theme(plot.title = element_blank(), axis.title.x = element_blank(),
+           legend.position = "top", axis.text.x = element_blank(),
+           legend.text = element_text(size=14), 
+           legend.title = element_text(size=14), legend.spacing.x = unit(25, "pt")) +
+  scale_y_log10() + geom_signif(comparisons = list(c("Yes","No")), annotations = c("Wilcox P=0.055"))
+
+pp=cowplot::plot_grid(pp1, pp2, ncol = 1, labels = c("b", "c"))
+ppp=cowplot::plot_grid(p3 + theme(axis.title = element_text(size=13),
+                              axis.text = element_text(size=12)), 
+                   pp, nrow = 1, rel_widths = c(2,1), labels = c("a", ""))
+ppp
+```
+
+
+
+```{r}
+da %>% dplyr::filter(comparison == "current_PTSD" & taxon_rank != "ASV")
+```
+
+```{r}
+microbe_volcano=function(res){
+  rs=c("Phylum", "Class", "Order", "Family", "Genus", "Species")#, "ASV")
+  cs=c("#0091FF","#005EEB","#003CFF","#0010EB","#4400F7","#260087")#,"#c7e9b4")#,"#edf8b1","#ffffd9")
+  res$taxon_rank=factor(res$taxon_rank, levels = rs)
+  p=res %>% mutate(significance=ifelse(qvalue < 0.05, 8, 20), 
+                 tax_lab=ifelse(qvalue < 0.05, taxon, "")) %>%
+    ggplot(aes(stat, -log10(pvalue), color=taxon_rank, label=tax_lab)) + 
+    scale_shape_identity() + geom_point(aes(shape=significance)) +
+    geom_hline(yintercept = -log10(0.05)) + geom_vline(xintercept = 0) +
+    geom_text_repel() + theme_classic() +
+    scale_color_manual(breaks = rs, values = cs)
+  
+  return(p)
+}
+```
+
+
+```{r}
+param="reactivity_symptoms_count"
+for(param in unique(da$comparison)){
+  p=da %>% dplyr::filter(comparison == param) %>%
+    dplyr::filter(taxon_rank != "ASV") %>%
+    microbe_volcano() +
+    ggtitle(param)
+  ggsave(file.path("differential_abundance", str_c(param, ".png")), 
+         p, "png", height = 5, width = 8)
+}
+```
+
+
+```{r}
+# Plot discrete conditions
+o=sam %>% dplyr::select(-ID, -zipcode) %>% dplyr::select_if(function(x) !is.numeric(x))
+o=colnames(o)
+oo=o[2]
+for (oo in o) {
+  r=da %>% dplyr::filter((comparison == oo) & (qvalue < 0.05) & (taxon_rank != "ASV"))
+  r=na.omit(r)
+  if (nrow(r) > 0) {
+    for (i in 1:nrow(r)) {
+      p=microbe_violin(ds, r[i,]$taxon, oo, r[i,]$taxon_rank)
+      ggsave(str_c(r[i,]$taxon, r[i,]$taxon_rank, oo, "violin.png", sep = "."), p)
+    }
+  }
+}
+```
+
+```{r}
+# Plot continuous conditions
+o=sam %>% dplyr::select(5, 9, 15:24, 29:40, 63:67)
+o=colnames(o)
+oo=o[2]
+for (oo in o) {
+  r=da %>% dplyr::filter((comparison == oo) & (qvalue < 0.05) & (taxon_rank != "ASV"))
+  r=na.omit(r)
+  if (nrow(r) > 0) {
+    for (i in 1:nrow(r)) {
+      p=microbe_corr(ds, r[i,]$taxon, oo, r[i,]$taxon_rank)
+      ggsave(file.path("figures", oo, str_c(r[i,]$taxon, r[i,]$taxon_rank, oo, "corr.png", sep = ".")), p)
+    }
+  }
+}
+```
+
+
+```{r}
+css=c("avoidence_severity_score", "negative_cognition_and_mood_severity_score", "total_severity_score", "reactivity_severity_score", "intrusive_severity_score", "psychopathology_total_score", "age", "years_of_education", "life_satisfaction", "interpersonal_sensitivity", "subjective_well_being", "dyadic_adjustment_scale")
+
+sam %>% select(css)
+
+cs=c("back_ache", "somatic_complaints", "drug_abuse", , "realization", "significant_recent_weight_loss", "religiosity", "joint_aches", "social_support", "other_digestion_issues", "post_traumatic_growth", "blood_preasure", "ethnicity", "chest_pain", "weakness_fatigue", "distress", "chronic_idiopathic_pain", "years_of_education", "dissociation", "life_satisfaction", "smoking", "memory_difficulties", "additional_symptomatology", "phobic_anxiety", "head_aches", "paranoid_ideation", "diabetes", "obsessive_compulsive_problems", "significant_recent_weight_gain", "ulcer", "hostility", "heart_problems", "alergy", "income", "cancer", "anxiety", "chronic_pain_physiologically_induced", "depression", "regular_medication", "alcohol_abuse", "psychoticism")
+#cs_counts=c("negative_cognition_and_mood_symptoms_count", "reactivity_symptoms_count", "total_symptoms_count", "intrusive_symptoms_count", "avoidence_symptoms_count")
+```
+
+
+```{r fig.height=10}
+library(corrplot)
+
+rccs=lapply(rccs, function(x) str_c(str_to_upper(str_sub(x, 1, 1)), 
+                               str_sub(x, 2))) %>% unlist()
+
+rsam=sam %>% dplyr::select(css)
+colnames(rsam)=as.vector(rccs)
+
+M=cor(rsam, use = "complete.obs")
+testRes = cor.mtest(rsam, conf.level = 0.95)
+
+png(width = 1200, height = 1200, filename = "correlation_plot.png")
+corrplot(M, p.mat = testRes$p, sig.level = 0.05, tl.cex = 2,
+         order = "hclust", insig = "label_sig", tl.col = "black")
+dev.off()
+```
+
+
+
+```{r fig.height=12}
+inclusion_list=c(cs, cs_scores)
+
+#rccs=lapply(rccs, function(x) str_c(str_to_upper(str_sub(x, 1, 1)), 
+#                               str_sub(x, 2))) %>% unlist()
+
+pp=da %>% dplyr::filter((qvalue < 0.05) & (comparison %in% inclusion_list))
+pp=pp$taxon
+mat=da %>% dplyr::filter(taxon %in% pp) %>% dplyr::filter(comparison %in% inclusion_list) %>%
+  distinct(taxon, comparison, .keep_all = T) %>% 
+  pivot_wider(id_cols = c(taxon, comparison), names_from = "comparison", values_from = "stat", values_fill = 0) %>%
+  as.data.frame()
+rownames(mat)=mat$taxon
+mat=as.matrix(mat[,-1])
+colnames(mat)=str_replace_all(colnames(mat), "_", " ")
+colnames(mat)=str_replace_all(colnames(mat), " score", "")
+
+colnames(mat)[which(colnames(mat) == "alergy")]="allergy"
+
+colnames(mat)=lapply(colnames(mat), function(x) str_c(str_to_upper(str_sub(x, 1, 1)), 
+                               str_sub(x, 2))) %>% unlist()
+
+library(ComplexHeatmap)
+mat %>% Heatmap(show_row_names = F, name = "Stat")
+
+mat %>% t() %>% scale() %>% t() %>% Heatmap(show_row_names = F, name = "Z-score")
+
+mat %>% scale() %>% Heatmap(show_row_names = F, name = "Z-score")
+```
+
+```{r fig.height=12}
+pp=da %>% dplyr::filter(qvalue < 0.05)
+pp=pp$taxon
+mat=da %>% dplyr::filter(taxon %in% pp) %>% dplyr::filter(!(comparison %in% exclusion_list)) %>%
+  distinct(taxon, comparison, .keep_all = T) %>% 
+  pivot_wider(id_cols = c(taxon, comparison), names_from = "comparison", values_from = "stat", values_fill = 0) %>%
+  as.data.frame()
+rownames(mat)=mat$taxon
+mat=as.matrix(mat[,-1])
+
+library(ComplexHeatmap)
+mat %>% Heatmap(show_row_names = F, name = "Stat")
+#mat %>% t() %>% scale() %>% t() %>% Heatmap(show_row_names = F, name = "Z-score")
+#mat %>% scale() %>% Heatmap(show_row_names = F, name = "Z-score")
+```
+
+
+```{r}
+pp=da %>% dplyr::filter(qvalue < 0.05)
+pp=pp$taxon
+mat=da %>% dplyr::filter(taxon %in% pp) %>% dplyr::filter(!(comparison %in% exclusion_list)) %>%
+  distinct(taxon, comparison, .keep_all = T) %>% 
+  pivot_wider(id_cols = c(taxon, comparison), names_from = "comparison", values_from = "stat", values_fill = 0) %>%
+  as.data.frame()
+rownames(mat)=mat$taxon
+mat=as.matrix(mat[,-1])
+
+library(ComplexHeatmap)
+mat %>% Heatmap(show_row_names = F, name = "Stat")
+mat %>% t() %>% scale() %>% t() %>% Heatmap(show_row_names = F, name = "Z-score")
+mat %>% scale() %>% Heatmap(show_row_names = F, name = "Z-score")
+```
+
+
+
+
+
+
+
+
+
+```{r}
+mat=da %>% distinct(taxon, comparison, .keep_all = T) %>%
+  dplyr::filter(taxon_rank != "ASV") %>%
+  pivot_wider(id_cols = c(taxon, comparison), names_from = "comparison", values_from = "stat") %>%
+  dplyr::filter(taxon %in% unique(da[da$qvalue < 0.05,]$taxon)) %>%
+  as.data.frame()
+
+rownames(mat)=mat$taxon
+mat=as.matrix(mat[,-1])
+
+p=mat %>% Heatmap(show_row_names = F)
+png("differential_abundance_heatmap.png", width = 1200, height = 1000)
+p
+dev.off()
+```
+
+
+# Pathway abundance
+```{r eval=FALSE}
+# Merge annotations
+metacyc=read.delim("picrust2_out_pipeline/metacyc.tsv.gz", row.names = 1) %>% mutate(ontology="MetaCyc")
+ko=read.delim("picrust2_out_pipeline/KO.tsv.gz", row.names = 1) %>% mutate(ontology="KO")
+ec=read.delim("picrust2_out_pipeline/EC.tsv.gz", row.names = 1) %>% mutate(ontology="EC")
+
+cnts=rbind(metacyc, ko)
+cnts=rbind(cnts, ec)
+
+# Pathway dictionary
+pws=tibble(pathway=rownames(cnts),description=cnts$description, ontology=cnts$ontology)
+
+colnames(cnts)=str_replace(colnames(cnts), "X", "")
+cnts=cnts[,intersect(colnames(cnts), sam$ID)]
+
+dds=phyloseq(otu_table(cnts, T), sample_data(sam))
+
+param="alcohol_abuse"
+
+r=ancombc(prune_samples(sam[!is.na(sam[[param]]),]$ID, dds), param, group=param, lib_cut = 1000)
+
+compare_pathways=function(dds, param, grp){
+  library(ANCOMBC)
+  
+  r=ancombc(prune_samples(sam[!is.na(sam[[param]]),]$ID, dds), param, group=grp, lib_cut = 1000)
+  oo=tibble(pvalue=r$res$p_val[[coef]], taxon=rownames(r$res$p_val), 
+            qvalue=r$res$q_val[[coef]], stat=r$res$W[[coef]], 
+            beta=r$res$beta[[coef]], se=r$res$se[[coef]])
+  r1=tibble(r$res$p_val) %>% mutate(pathway=rownames(r$res$p_val), r$res$q_val)
+  colnames(r1)[1]="pvalue"
+  r2=r$res$W %>% tibble() %>% mutate(pathway=rownames(r$res$W))
+  colnames(r2)[1]="W"
+  r1=r1 %>% left_join(r2, by="pathway")
+  
+  r2=r$res$beta %>% tibble() %>% mutate(pathway=rownames(r$res$beta))
+  colnames(r2)[1]="beta"
+  r1=r1 %>% left_join(r2, by="pathway")
+  
+  r2=r$res$se %>% tibble() %>% mutate(pathway=rownames(r$res$se))
+  colnames(r2)[1]="SE"
+  r1=r1 %>% left_join(r2, by="pathway")
+  
+  r1=r1 %>% left_join(pws, by="pathway")
+  
+  r1=r1 %>% arrange(pvalue)
+  
+  r1 %>% write_csv(str_c(param, "pathway", "csv", sep = "."))
+  #return(r1)
+}
+```
+
+
+
+```{r fig.height=12}
+mat1=sam %>% dplyr::select(c(1, 11:14, 25:28, 41:62, 68)) %>% as.data.frame()
+rownames(mat1)=mat1$ID
+mat1=as.matrix(mat1[,-1])
+
+#TODO: Clustering for binary parameters/some combined clustering methods
+library(ComplexHeatmap)
+mat1=ifelse(is.na(mat1), NA, as.character(mat1))
+cs=structure(c("blue", "red"), names=c("TRUE", "FALSE"))
+mat1[order(as.vector(mat1[,"hypothetical_batch"])),] %>% t() %>% 
+  Heatmap(rect_gp = gpar(col = "white", lwd = 1))#col = cs)
+
+
+
+mat=sam %>% mutate_at(c(5, 9, 15:19, 31:40, 63:67), scale) %>%
+  mutate_at(c(11:14, 25:28, 41:62), function(x) ifelse(is.na(x), NA, ifelse(x, 1, -1))) %>%
+  dplyr::select(c(c(5, 9, 15:19, 31:40, 63:67), c(11:14, 25:28, 41:62), 68)) %>%
+  as.matrix()
+
+mat %>% Heatmap()
+
+#rect_gp = gpar(col = "white", lwd = 1)
+```
+
+
+```{r fig.height=12}
+mat1=sam %>% dplyr::select(c(1, 5, 9, 15:19, 31:40, 63:67)) %>% as.data.frame()
+rownames(mat1)=mat1$ID
+mat1=as.matrix(mat1[,-1])
+
+mat1=t(scale(mat1))
+
+#TODO: Clustering for binary parameters/some combined clustering methods
+library(ComplexHeatmap)
+mat1 %>% Heatmap(rect_gp = gpar(col = "white", lwd = 1))
+```
+
+
+
+
+# Volcano plots
+
+```{r}
+param="alcohol_abuse"
+for (param in unique(da$comparison)) {
+  da %>% dplyr::filter(comparison == param) %>%
+    dplyr::filter(taxon_rank != "ASV") %>%
+    microbe_volcano() +
+    ggtitle(param)
+}
+```
+
+
+
+
+
+
+
+
